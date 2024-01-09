@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 from langchain.schema.output import ChatGenerationChunk, GenerationChunk
 import streamlit as st
-from langchain.prompts import ChatPromptTemplate
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.document_loaders import UnstructuredFileLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings, CacheBackedEmbeddings
@@ -11,6 +11,7 @@ from langchain.storage import LocalFileStore
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.chat_models import ChatOpenAI
 from langchain.callbacks.base import BaseCallbackHandler
+from langchain.memory import ConversationSummaryBufferMemory
 
 st.set_page_config(page_title="DocumentGPT", page_icon="💼")
 
@@ -35,6 +36,14 @@ llm = ChatOpenAI(
     callbacks=[
         ChatCallbackHandler(),
     ],
+)
+
+
+memory = ConversationSummaryBufferMemory(
+    llm=llm,
+    max_token_limit=120,
+    memory_key="chat_history",
+    return_messages=True,
 )
 
 
@@ -65,6 +74,10 @@ def save_message(message, role):
     st.session_state["messages"].append({"message": message, "role": role})
 
 
+def save_memory(input, output):
+    st.session_state["chat_history"].append({"input": input, "output": output})
+
+
 def send_message(message, role, save=True):
     with st.chat_message(role):
         # 메세지를 화면에 표시함 역할에 따라 다르게
@@ -82,8 +95,17 @@ def paint_history():
         )
 
 
+def restore_memory():
+    for history in st.session_state["chat_history"]:
+        memory.save_context({"input": history["input"]}, {"output": history["output"]})
+
+
 def format_docs(docs):
     return "\n\n".join(document.page_content for document in docs)
+
+
+def load_memory(input):
+    return memory.load_memory_variables({})["chat_history"]
 
 
 prompt = ChatPromptTemplate.from_messages(
@@ -97,6 +119,7 @@ prompt = ChatPromptTemplate.from_messages(
             Context: {context}
             """,
         ),
+        MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{question}"),
     ]
 )
@@ -123,6 +146,7 @@ with st.sidebar:
 if file:
     retriever = embed_file(file)
     send_message("I'm ready! Ask away!", "ai", save=False)
+    restore_memory()
     paint_history()
     message = st.chat_input("Ask anything about your file...")
     if message:
@@ -131,13 +155,16 @@ if file:
             {
                 "context": retriever | RunnableLambda(format_docs),
                 "question": RunnablePassthrough(),
+                "chat_history": load_memory,
             }
             | prompt
             | llm
         )
         with st.chat_message("ai"):
-            chain.invoke(message)
+            result = chain.invoke(message)
+            save_memory(message, result.content)
 
 
 else:
     st.session_state["messages"] = []
+    st.session_state["chat_history"] = []
