@@ -1,6 +1,3 @@
-from typing import Any, Dict, List, Optional, Union
-from uuid import UUID
-from langchain.schema.output import ChatGenerationChunk, GenerationChunk
 import streamlit as st
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.document_loaders import UnstructuredFileLoader
@@ -139,8 +136,8 @@ st.markdown(
 
 with st.sidebar:
     file = st.file_uploader(
-        "Upload a .txt .pdf or .docx file",
-        type=["pdf", "txt", "docx"],
+        "Upload a .txt .pdf or .docx or .png file",
+        type=["pdf", "txt", "docx", "png"],
     )
 
 if file:
