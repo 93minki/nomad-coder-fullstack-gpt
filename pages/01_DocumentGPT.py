@@ -71,10 +71,6 @@ def save_message(message, role):
     st.session_state["messages"].append({"message": message, "role": role})
 
 
-def save_memory(input, output):
-    st.session_state["chat_history"].append({"input": input, "output": output})
-
-
 def send_message(message, role, save=True):
     with st.chat_message(role):
         # 메세지를 화면에 표시함 역할에 따라 다르게
@@ -92,17 +88,8 @@ def paint_history():
         )
 
 
-def restore_memory():
-    for history in st.session_state["chat_history"]:
-        memory.save_context({"input": history["input"]}, {"output": history["output"]})
-
-
 def format_docs(docs):
     return "\n\n".join(document.page_content for document in docs)
-
-
-def load_memory(input):
-    return memory.load_memory_variables({})["chat_history"]
 
 
 prompt = ChatPromptTemplate.from_messages(
@@ -116,7 +103,6 @@ prompt = ChatPromptTemplate.from_messages(
             Context: {context}
             """,
         ),
-        MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{question}"),
     ]
 )
@@ -143,7 +129,6 @@ with st.sidebar:
 if file:
     retriever = embed_file(file)
     send_message("I'm ready! Ask away!", "ai", save=False)
-    restore_memory()
     paint_history()
     message = st.chat_input("Ask anything about your file...")
     if message:
@@ -152,16 +137,13 @@ if file:
             {
                 "context": retriever | RunnableLambda(format_docs),
                 "question": RunnablePassthrough(),
-                "chat_history": load_memory,
             }
             | prompt
             | llm
         )
         with st.chat_message("ai"):
             result = chain.invoke(message)
-            save_memory(message, result.content)
 
 
 else:
     st.session_state["messages"] = []
-    st.session_state["chat_history"] = []
