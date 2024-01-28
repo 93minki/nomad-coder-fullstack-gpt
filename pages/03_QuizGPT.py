@@ -1,14 +1,26 @@
-import streamlit as st
-from langchain.retrievers import WikipediaRetriever
-from langchain.text_splitter import CharacterTextSplitter
+import json
+
 from langchain.document_loaders import UnstructuredFileLoader
+from langchain.text_splitter import CharacterTextSplitter
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.callbacks import StreamingStdOutCallbackHandler
+import streamlit as st
+from langchain.retrievers import WikipediaRetriever
+from langchain.schema import BaseOutputParser, output_parser
+
+
+class JsonOutputParser(BaseOutputParser):
+    def parse(self, text):
+        text = text.replace("```", "").replace("json", "")
+        return json.loads(text)
+
+
+output_parser = JsonOutputParser()
 
 st.set_page_config(
-    page_title="Quiz",
-    page_icon="💯",
+    page_title="QuizGPT",
+    page_icon="❓",
 )
 
 st.title("QuizGPT")
@@ -32,7 +44,7 @@ questions_prompt = ChatPromptTemplate.from_messages(
             """
     You are a helpful assistant that is role playing as a teacher.
          
-    Based ONLY on the following context make 10 questions to test the user's knowledge about the text.
+    Based ONLY on the following context make 10 (TEN) questions minimum to test the user's knowledge about the text.
     
     Each question should have 4 answers, three of them must be incorrect and one should be correct.
          
@@ -52,9 +64,6 @@ questions_prompt = ChatPromptTemplate.from_messages(
     Question: Who was Julius Caesar?
     Answers: A Roman Emperor(o)|Painter|Actor|Model
          
-         
-    Additionally, the answer must be in Korean.
-    
     Your turn!
          
     Context: {context}
@@ -64,7 +73,6 @@ questions_prompt = ChatPromptTemplate.from_messages(
 )
 
 questions_chain = {"context": format_docs} | questions_prompt | llm
-
 
 formatting_prompt = ChatPromptTemplate.from_messages(
     [
@@ -77,6 +85,7 @@ formatting_prompt = ChatPromptTemplate.from_messages(
     Answers with (o) are the correct ones.
      
     Example Input:
+
     Question: What is the color of the ocean?
     Answers: Red|Yellow|Green|Blue(o)
          
@@ -182,7 +191,9 @@ formatting_prompt = ChatPromptTemplate.from_messages(
      }}
     ```
     Your turn!
+
     Questions: {context}
+
 """,
         )
     ]
@@ -197,21 +208,34 @@ def split_file(file):
     file_path = f"./.cache/quiz_files/{file.name}"
     with open(file_path, "wb") as f:
         f.write(file_content)
-
-    spliter = CharacterTextSplitter.from_tiktoken_encoder(
+    splitter = CharacterTextSplitter.from_tiktoken_encoder(
         separator="\n",
         chunk_size=600,
         chunk_overlap=100,
     )
     loader = UnstructuredFileLoader(file_path)
-    docs = loader.load_and_split(text_splitter=spliter)
+    docs = loader.load_and_split(text_splitter=splitter)
+    return docs
+
+
+@st.cache_data(show_spinner="Making quiz...")
+def run_quiz_chain(_docs, topic):
+    chain = {"context": questions_chain} | formatting_chain | output_parser
+    return chain.invoke(_docs)
+
+
+@st.cache_data(show_spinner="Searching Wikipedia...")
+def wiki_search(term):
+    retriever = WikipediaRetriever(top_k_results=5)
+    docs = retriever.get_relevant_documents(term)
     return docs
 
 
 with st.sidebar:
     docs = None
+    topic = None
     choice = st.selectbox(
-        "Choose What you want to use.",
+        "Choose what you want to use.",
         (
             "File",
             "Wikipedia Article",
@@ -219,7 +243,7 @@ with st.sidebar:
     )
     if choice == "File":
         file = st.file_uploader(
-            "Upload a .docx, .txt or .pdf file",
+            "Upload a .docx , .txt or .pdf file",
             type=["pdf", "txt", "docx"],
         )
         if file:
@@ -227,30 +251,34 @@ with st.sidebar:
     else:
         topic = st.text_input("Search Wikipedia...")
         if topic:
-            retriever = WikipediaRetriever(top_k_results=3, lang="ko")
-            with st.status("Searching Wikipedia..."):
-                docs = retriever.get_relevant_documents(topic)
+            docs = wiki_search(topic)
 
 
 if not docs:
     st.markdown(
         """
     Welcome to QuizGPT.
-    
-    I will make a quiz from Wikipedia articles or files you upload to test
-    your knowledge and help you study.
-    
-    Get started by uploading a file or searching on Wikipedia in the sidebar. 
+                
+    I will make a quiz from Wikipedia articles or files you upload to test your knowledge and help you study.
+                
+    Get started by uploading a file or searching on Wikipedia in the sidebar.
     """
     )
 else:
-    start = st.button("Generate Quiz")
-    if start:
-        qeustions_response = questions_chain.invoke(docs)
-        st.write(qeustions_response.content)
-        formatting_response = formatting_chain.invoke(
-            {
-                "context": qeustions_response.content,
-            }
-        )
-        st.write(formatting_response.content)
+    response = run_quiz_chain(docs, topic if topic else file.name)
+    st.write(response)
+    with st.form("questions_form"):
+        for idx, question in enumerate(response["questions"]):
+            st.write(question["question"])
+            value = st.radio(
+                f"Select an Option {idx}",
+                [answer["answer"] for answer in question["answers"]],
+                key=f"{idx}_radio",
+                index=None,
+            )
+
+            if {"answer": value, "correct": True} in question["answers"]:
+                st.success("Correct!")
+            elif value is not None:
+                st.error("Wrong")
+        button = st.form_submit_button()
